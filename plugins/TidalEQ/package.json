@@ -1,0 +1,11 @@
+{
+	"name": "TidalEQ",
+	"description": "A real equalizer inside TIDAL: 10 parametric bands, presets, smart volume and limiter. Needs mpv.",
+	"homepage": "https://github.com/BaeHyolyn/luna-plugins",
+	"author": {
+		"name": "BaeHyolyn",
+		"url": "https://github.com/BaeHyolyn",
+		"avatarUrl": "https://github.com/BaeHyolyn.png"
+	},
+	"exports": "./src/index.ts"
+}

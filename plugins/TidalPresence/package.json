@@ -1,0 +1,14 @@
+{
+	"name": "TidalPresence",
+	"description": "Your TIDAL music in Discord, your way. Custom text, audio quality, year and more.",
+	"homepage": "https://github.com/BaeHyolyn/luna-plugins",
+	"author": {
+		"name": "BaeHyolyn",
+		"url": "https://github.com/BaeHyolyn",
+		"avatarUrl": "https://github.com/BaeHyolyn.png"
+	},
+	"exports": "./src/index.ts",
+	"dependencies": {
+		"@xhayper/discord-rpc": "^1.3.0"
+	}
+}

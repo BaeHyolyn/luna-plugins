@@ -1,0 +1,38 @@
+{
+	"name": "luna-plugins",
+	"description": "BaeHyolyn's TidaLuna plugins: TidalPresence and TidalEQ",
+	"author": {
+		"name": "BaeHyolyn",
+		"url": "https://github.com/BaeHyolyn",
+		"avatarUrl": "https://github.com/BaeHyolyn.png"
+	},
+	"homepage": "https://github.com/BaeHyolyn/luna-plugins",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/BaeHyolyn/luna-plugins.git"
+	},
+	"type": "module",
+	"scripts": {
+		"watch": "concurrently npm:esWatch npm:serve",
+		"build": "rimraf ./dist && tsx esbuild.config.ts",
+		"esWatch": "rimraf ./dist && tsx ./esbuild.config.ts --watch",
+		"serve": "http-server ./dist -p 3000 -s --cors -c-1",
+		"test": "tsx plugins/TidalPresence/src/lrc.test.ts && tsx plugins/TidalPresence/src/lookup.test.ts && tsx plugins/TidalPresence/src/rateLimit.test.ts && tsx plugins/TidalPresence/src/text.test.ts && tsx plugins/TidalPresence/src/styles.test.ts && tsx plugins/TidalEQ/src/eq.test.ts && tsx plugins/TidalEQ/src/viz.test.ts"
+	},
+	"devDependencies": {
+		"@inrixia/helpers": "^3.21.2",
+		"@types/node": "^25.0.10",
+		"@types/react": "^19.2.9",
+		"@types/react-dom": "^19.2.3",
+		"concurrently": "^9.2.1",
+		"electron": "^40.0.0",
+		"http-server": "^14.1.1",
+		"luna": "github:Inrixia/TidaLuna",
+		"oby": "^15.1.2",
+		"rimraf": "^6.1.2",
+		"tsx": "^4.21.0",
+		"typescript": "^5.9.3"
+	},
+	"license": "AGPL-3.0",
+	"version": "1.0.0"
+}
