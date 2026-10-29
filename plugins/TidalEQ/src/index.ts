@@ -1,10 +1,10 @@
 import { Tracer, type LunaUnload } from "@luna/core";
-import { ipcRenderer, MediaItem, PlayState, redux, safeInterval } from "@luna/lib";
+import { ipcRenderer, MediaItem, PlayState, redux, safeInterval, TidalApi, type PlaybackInfo } from "@luna/lib";
 
 import { buildChain } from "./eq";
 import { addPanelTab, EqPanel } from "./NowPlayingTab";
 import {
-	cueTrack, decodeTrack, easeSpeed, getTime, isAlive, loadTrack, prepareTrack, seek, startMix, setChain, setPaused, setVolume, startAnalysis, startPlayer, stopAnalysis, stopPlayer, stopTrack,
+	cueTrack, decodeTrack, mixControl, easeSpeed, getTime, isAlive, loadTrack, prepareTrack, seek, startMix, setChain, setPaused, setVolume, startAnalysis, startPlayer, stopAnalysis, stopPlayer, stopTrack,
 	trackFailed,
 } from "./player.native";
 import { setEqChangeHandler, settings, vizSettings } from "./Settings";
@@ -49,13 +49,44 @@ const tidalPosition = () => {
 	return reported + Math.min(0.5, (now - lastReported.at) / 1000);
 };
 
+// Luna caches playback info for the whole session, but its file links expire after a few hours (then 403):
+// when a link is dead, drop both caches and ask again. If it's still refused, take the next lower quality.
+const QUALITIES: redux.AudioQuality[] = ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"];
+const linkWorks = (info: PlaybackInfo) => {
+	if (info.manifestMimeType !== "application/vnd.tidal.bts") return true; // DASH: segment links, no expiry seen
+	return fetch(info.manifest.urls[0], { headers: { Range: "bytes=0-0" } }).then((r) => r.ok, () => false);
+};
+const streamInfo = async (media: MediaItem) => {
+	const playing = QUALITIES.indexOf(PlayState.playbackContext?.actualAudioQuality as redux.AudioQuality);
+	for (const quality of QUALITIES.slice(Math.max(0, playing))) {
+		let info = await media.playbackInfo(quality).catch(() => undefined);
+		if (info && !(await linkWorks(info))) {
+			// Same URL Luna's TidalApi.playbackInfo builds, so its memoized response is the one dropped
+			TidalApi.fetch.clear(`https://desktop.tidal.com/v1/tracks/${media.id}/playbackinfo?audioquality=${quality}&playbackmode=STREAM&assetpresentation=FULL`);
+			(media.playbackInfo as unknown as { clear: (q: redux.AudioQuality) => void }).clear(quality); // memoized too, untyped
+			const dead = info.manifestMimeType === "application/vnd.tidal.bts" ? info.manifest.urls[0] : undefined;
+			info = await media.playbackInfo(quality).catch(() => undefined);
+			// Same link again: Luna changed how it caches, so the clear above missed. Say so instead of failing quietly.
+			if (info?.manifestMimeType === "application/vnd.tidal.bts" && info.manifest.urls[0] === dead) trace.warn("cached playback info could not be refreshed");
+			if (info && !(await linkWorks(info))) info = undefined;
+		}
+		if (info) return info;
+	}
+};
+
 // TIDAL's own player keeps playing (so progress, queue and next track work as always), just silent
 const setOriginalVolume = (volume: number) =>
 	ipcRenderer.send("player.message", JSON.stringify({ command: "media.volume", volume }));
 
+let mixPaused = false;
 const sync = async () => {
 	// TIDAL restores its own volume when it changes track by itself, which it can do mid-mix: keep it silent
-	if (running && mixing) setOriginalVolume(0);
+	if (running && mixing) {
+		setOriginalVolume(0);
+		// The rest of sync waits for the mix, but TIDAL's pause and volume can't (startMix holds both decks itself)
+		if (PlayState.playing === mixPaused) setPaused((mixPaused = !PlayState.playing)).catch(() => {});
+		mixControl(tidalVolume(), !PlayState.playing).catch(() => {});
+	}
 	if (!running || busy || mixing || performance.now() < holdUntil) return;
 	busy = true;
 	try {
@@ -80,8 +111,7 @@ const sync = async () => {
 		setOriginalVolume(0);
 
 		if (media.id !== loadedId) {
-			const quality = PlayState.playbackContext?.actualAudioQuality;
-			const info = await media.playbackInfo(quality).catch(() => undefined);
+			const info = await streamInfo(media);
 			if (!info) return letTidalPlay(media.id, "Couldn't get this track for the equalizer");
 			await loadTrack(info, tidalPosition(), !PlayState.playing);
 			loadedId = media.id;
@@ -179,7 +209,7 @@ const syncVisualizerOnly = async () => {
 		// The download is only for the visualizer here, so wait until its cover is actually on screen
 		if (media.id === vizOnlyId || !coverShown()) return;
 		vizOnlyId = media.id;
-		const info = await media.playbackInfo(PlayState.playbackContext?.actualAudioQuality).catch(() => undefined);
+		const info = await streamInfo(media);
 		if (!info || running) return;
 		await prepareTrack(info);
 		await startAnalysis(PCM_RATE, settings.mpvPath);
@@ -213,22 +243,35 @@ const doStart = async () => {
  * For TidalDJ: mixes from the playing track into `id` (beat-matched with a bass swap when tempos allow, else a fade,
  * starting on the next bar line), then moves
  * TIDAL to it at the same position. `id` must be next in TIDAL's queue. False when it couldn't mix (TIDAL just moves on).
+ * `bars`: longest beat mix; `bassSwap: false` keeps both basslines through the mix.
  */
-export const mixInto = async (id: MediaItem["id"]) => {
+export const mixInto = async (id: MediaItem["id"], { bars = 16, bassSwap = true } = {}) => {
 	if (!running || mixing || loadedId === null || loadedId === tidalPlaysId) return false;
 	mixing = true;
+	mixPaused = false;
+	const mine = generation;
+	// Until the fade starts the user can still change their mind: equalizer turned off/on, the next song removed or
+	// replaced, repeat-one turned on. Then there's no mix and TIDAL carries on as they asked.
+	const wanted = () => {
+		const { elements, currentIndex } = PlayState.playQueue;
+		return mine === generation && running && PlayState.repeatMode !== PlayState.RepeatMode.One && String(elements[currentIndex + 1]?.mediaItemId) === String(id);
+	};
 	try {
 		const media = await MediaItem.fromId(id);
-		const info = await media?.playbackInfo(PlayState.playbackContext?.actualAudioQuality).catch(() => undefined);
+		const info = media && (await streamInfo(media));
 		const [from, to] = await Promise.all([analyzeTrack(loadedId), analyzeTrack(id)]);
 		const now = (await getTime()) ?? 0;
 		// Without a grid for both tracks: a plain fade, right away
-		let plan = from && to ? planMix(from, to, now, 3) : { style: "fade" as const, outAt: now, inAt: 0, speed: 1, seconds: 6 };
+		let plan = from && to ? planMix(from, to, now, 3, bars) : { style: "fade" as const, outAt: now, inAt: 0, speed: 1, seconds: 6 };
 		const beatmix = plan.style === "beatmix";
-		if (!media || !info || !(await cueTrack(info, plan.inAt, plan.speed, beatmix))) return false;
+		if (!media || !info || !(await cueTrack(info, plan.inAt, plan.speed, beatmix && bassSwap))) return false;
 		// Cueing can take longer than planned: move to a later bar line rather than start off the beat
-		if (from && to && ((await getTime()) ?? 0) > plan.outAt - 0.3) plan = { ...plan, outAt: planMix(from, to, (await getTime()) ?? 0, 0.5).outAt };
+		if (from && to && ((await getTime()) ?? 0) > plan.outAt - 0.3) plan = { ...plan, outAt: planMix(from, to, (await getTime()) ?? 0, 0.5, bars).outAt };
 		for (;;) {
+			if (!wanted()) {
+				trace.log("mix called off");
+				return false;
+			}
 			const left = plan.outAt - ((await getTime()) ?? plan.outAt);
 			if (left <= 0.4) {
 				if (left > 0) await new Promise((r) => setTimeout(r, left * 1000));
@@ -236,8 +279,10 @@ export const mixInto = async (id: MediaItem["id"]) => {
 			}
 			await new Promise((r) => setTimeout(r, (left - 0.3) * 1000));
 		}
-		trace.log(`mix ${plan.style}: ${from?.bpm.toFixed(1)} → ${to?.bpm.toFixed(1)} BPM ×${plan.speed.toFixed(3)}, ${plan.seconds.toFixed(1)} s from ${plan.inAt.toFixed(1)} s`);
-		await startMix(plan.seconds, tidalVolume(), beatmix);
+		trace.log(`mix ${plan.style}: ${from?.bpm.toFixed(1)} → ${to?.bpm.toFixed(1)} BPM ×${plan.speed.toFixed(3)} (grid ${from?.confidence.toFixed(2)}/${to?.confidence.toFixed(2)}), ${plan.seconds.toFixed(1)} s from ${plan.inAt.toFixed(1)} s`);
+		if (!wanted()) return false;
+		await startMix(plan.seconds, tidalVolume(), beatmix && bassSwap);
+		if (mine !== generation) return false; // turned off mid-fade: the players it was driving are gone
 		loadedId = media.id;
 		analyzedId = null;
 		lastPaused = false;
@@ -278,7 +323,7 @@ export const analyzeTrack = (id: MediaItem["id"]) => {
 	if (!grids.has(key)) {
 		const job = (async () => {
 			const media = await MediaItem.fromId(id);
-			const info = await media?.playbackInfo(PlayState.playbackContext?.actualAudioQuality).catch(() => undefined);
+			const info = media && (await streamInfo(media));
 			const bytes = info && (await decodeTrack(info, BEAT_RATE, settings.mpvPath));
 			// slice(): an aligned copy, IPC buffers can start at any byte
 			return bytes ? analyzeBeats(new Float32Array(bytes.slice().buffer, 0, bytes.length >> 2)) : null;

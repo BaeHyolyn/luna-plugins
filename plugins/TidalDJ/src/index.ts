@@ -24,20 +24,26 @@ const taste = () => {
 	return { favArtists: new Set<string>(artists.map(String)), favTracks: new Set<string>(tracks.map(String)), skippedArtists };
 };
 
+let queueing = false; // the DJ button and a track change can both call this: one pick at a time
 const queueNext = async (item: MediaItem) => {
 	const { elements, currentIndex } = PlayState.playQueue;
-	if (!settings.enabled || currentIndex < elements.length - 1) return; // the user's own queue comes first
-	const radio = await TidalApi.fetch<{ items: redux.Track[] }>(`https://desktop.tidal.com/v1/tracks/${item.id}/radio?limit=50&${TidalApi.queryArgs()}`);
-	const candidates = (radio?.items ?? []).map((t) => ({ id: t.id, artistId: t.artist?.id, bpm: t.bpm ?? undefined }));
-	// TidalEQ's measured tempo when it's there: TIDAL's own is often missing
-	const bpm = (await mixer()?.analyzeTrack(item.id).catch(() => null))?.bpm ?? (await item.bpm());
-	const next = pickNext(candidates, settings.mode, played, recentArtists, bpm, taste());
-	if (next === undefined) return trace.msg.warn("No new radio songs for this track, the queue will end here.");
-	played.add(String(next.id));
-	djQueued.add(String(next.id));
-	// TIDAL's player only loads songs it already holds in its store; a bare radio id fails "not available in location"
-	await MediaItem.fromId(next.id);
-	PlayState.playNext(next.id);
+	if (queueing || !settings.enabled || currentIndex < elements.length - 1) return; // the user's own queue comes first
+	queueing = true;
+	try {
+		const radio = await TidalApi.fetch<{ items: redux.Track[] }>(`https://desktop.tidal.com/v1/tracks/${item.id}/radio?limit=50&${TidalApi.queryArgs()}`);
+		const candidates = (radio?.items ?? []).map((t) => ({ id: t.id, artistId: t.artist?.id, bpm: t.bpm ?? undefined }));
+		// TidalEQ's measured tempo when it's there: TIDAL's own is often missing
+		const bpm = (await mixer()?.analyzeTrack(item.id).catch(() => null))?.bpm ?? (await item.bpm());
+		const next = pickNext(candidates, settings.mode, played, recentArtists, bpm, taste());
+		if (next === undefined) return trace.msg.warn("No new radio songs for this track, the queue will end here.");
+		played.add(String(next.id));
+		djQueued.add(String(next.id));
+		// TIDAL's player only loads songs it already holds in its store; a bare radio id fails "not available in location"
+		await MediaItem.fromId(next.id);
+		PlayState.playNext(next.id);
+	} finally {
+		queueing = false;
+	}
 };
 
 /** Drops the songs queued after this one and lets the DJ pick from here. */
@@ -102,33 +108,37 @@ safeInterval(
 
 
 // Mixing is done by TidalEQ (it owns the audio): find its enabled copy, wherever it was installed from
-type Mixer = { analyzeTrack: (id: MediaItem["id"]) => Promise<Grid | null>; mixInto: (id: MediaItem["id"]) => Promise<boolean> };
+type Mixer = { analyzeTrack: (id: MediaItem["id"]) => Promise<Grid | null>; mixInto: (id: MediaItem["id"], opts?: { bars?: number; bassSwap?: boolean }) => Promise<boolean> };
 const mixer = () =>
 	Object.values(LunaPlugin.plugins).find((p) => p.name === "TidalEQ" && p.enabled && typeof (p.exports as Partial<Mixer> | undefined)?.mixInto === "function")?.exports as Mixer | undefined;
 
 const MIX_LEAD_S = 3; // mixInto needs a moment to cue the next song; it then waits for the bar line itself
-let mixedFrom = ""; // one mix attempt per song
+let mixedFrom = ""; // one mix attempt per queue entry (uid: the same song twice in a row still mixes)
 let busy = false;
 safeInterval(
 	unloads,
 	async () => {
 		const id = String(PlayState.playbackContext?.actualProductId ?? "");
 		const { elements, currentIndex } = PlayState.playQueue;
+		const entry = `${elements[currentIndex]?.uid}:${id}`;
 		const next = elements[currentIndex + 1]?.mediaItemId;
 		const eq = mixer();
-		if (busy || !settings.enabled || !settings.mix || !PlayState.playing || !id || id === mixedFrom || next === undefined || !eq) return;
+		// Repeat-one: TIDAL plays this song again, nothing to mix into
+		if (busy || !settings.enabled || !settings.mix || !PlayState.playing || PlayState.repeatMode === PlayState.RepeatMode.One || !id || entry === mixedFrom || next === undefined || !eq) return;
 		busy = true;
 		try {
 			const grid = await eq.analyzeTrack(id); // cached by TidalEQ after the first call
-			if (!grid || String(PlayState.playbackContext?.actualProductId) !== id) return;
-			// Club needs the next song's tempo too (analysed ahead, cached for the mix itself)
-			const nextBpm = settings.mode === "club" ? (await eq.analyzeTrack(next))?.bpm : undefined;
+			// Can't be analysed (offline, too short): don't decode it again every tick, TIDAL moves on by itself
+			if (!grid) return void (mixedFrom = entry);
 			if (String(PlayState.playbackContext?.actualProductId) !== id) return;
-			const at = mixPoint(grid, settings.mode, nextBpm);
+			// Analyse the next song ahead (cached for the mix itself), else the mix would wait on it; club also needs its tempo
+			const nextBpm = (await eq.analyzeTrack(next))?.bpm;
+			if (String(PlayState.playbackContext?.actualProductId) !== id) return;
+			const at = mixPoint(grid, settings.mode, nextBpm, settings.mixBars);
 			const now = PlayState.currentTime;
 			if (now < at - MIX_LEAD_S || now > grid.duration - 2) return;
-			mixedFrom = id;
-			if (!(await eq.mixInto(next))) trace.log("Could not mix, TIDAL moves on by itself");
+			mixedFrom = entry;
+			if (!(await eq.mixInto(next, { bars: settings.mixBars, bassSwap: settings.bassSwap }))) trace.log("Could not mix, TIDAL moves on by itself");
 		} finally {
 			busy = false;
 		}

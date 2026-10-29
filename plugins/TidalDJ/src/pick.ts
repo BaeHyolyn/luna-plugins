@@ -53,9 +53,10 @@ const CLUB_SHARE = 0.6; // Club leaves after this much of the song: earlier felt
 const CLUB_MAIN_BARS = 32; // and never before 32 bars past the intro
 
 /** Position (s) in the playing song where its mix into the next one (at `nextBpm`) should start. */
-export const mixPoint = (g: Grid, mode: Mode, nextBpm?: number) => {
+export const mixPoint = (g: Grid, mode: Mode, nextBpm?: number, mixBars = MIX_BARS) => {
 	const bar = 240 / g.bpm;
-	const end = Math.max(0, Math.min(g.outroStart, g.duration - MIX_BARS * bar)); // over its outro, never squeezed at the very end
+	// Over its outro, never squeezed at the very end, and never before half the song (short songs get a shorter mix)
+	const end = Math.max(g.duration / 2, Math.min(g.outroStart, g.duration - mixBars * bar));
 	// Club: leave once the song has shown its main part, like a DJ cutting a track short
 	// Only when the next song beat-mixes: a mid-song fade between clashing tempos sounds like a mistake
 	return mode === "club" && nextBpm !== undefined && mixable(g.bpm, nextBpm) ? Math.min(end, Math.max(g.duration * CLUB_SHARE, g.introEnd + CLUB_MAIN_BARS * bar)) : end;

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.0
+
+### New
+- TidalDJ can set the mix length (8, 16 or 32 bars) and turn the bass swap off.
+- Songs without a clear beat (piano, acoustic, ambient) get an 8 s fade instead of a beat mix.
+
+### Fixed
+- After about an hour of listening, songs could play without the equalizer: TIDAL's file links expire and the cached ones were refused. Expired links are now fetched again, falling back to a lower quality only if TIDAL still refuses.
+- In a DJ mix, the incoming song sounded flat at first: its bass was cut too deep for too long. The cut is now milder and the bass moves over a quarter of the way in.
+- Pausing or changing the volume during a DJ mix now works.
+- A mix can no longer be planned past the end of a song.
+- A DJ mix is called off if, before it starts, the next song is removed or replaced, repeat-one is turned on, or the equalizer is turned off.
+
 ## 1.5.0
 
 ### New

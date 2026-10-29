@@ -244,7 +244,7 @@ const urlOf = (token: string) => `http://127.0.0.1:${port}/track/${token}`;
 
 // Bass swap: a labelled low shelf on each deck during a beat mix, so only one deck carries the bass at a time
 const BASS = "@djbass";
-const BASS_CUT = -26;
+const BASS_CUT = -12; // enough to stop two kicks booming; deeper made the incoming song sound like it had no EQ
 
 /**
  * Loads a track on the idle deck, silent and paused at `startAt`; true once it can start right away.
@@ -279,23 +279,41 @@ export const cueTrack = async (info: PlaybackInfo, startAt: number, speed = 1, b
  * Crossfades from the playing deck into the cued one over `seconds` (equal power, so loudness doesn't dip),
  * then the cued deck becomes the playing one. `volume` is the user's volume on mpv's 0-100 scale.
  */
+// Live controls for a running mix (the renderer can't pass callbacks over IPC): TIDAL's volume and pause
+let mixVolume = 0;
+let mixHeld = false;
+export const mixControl = async (volume: number, paused: boolean) => {
+	mixVolume = volume;
+	mixHeld = paused;
+};
 export const startMix = async (seconds: number, volume: number, bassSwap = false) => {
+	mixVolume = volume;
+	mixHeld = false;
 	const from = deck();
 	const to = idle();
 	if (bassSwap) await send(from, "af", "add", `${BASS}:lavfi=[bass=g=0:f=150:t=q:w=0.7]`).catch(() => (bassSwap = false));
 	let swapped = !bassSwap;
 	// mpv's volume is cubic (amplitude = (v/100)^3), so a gain g needs v = volume * cbrt(g)
-	const level = (gain: number) => volume * Math.cbrt(Math.max(0, gain));
+	// Read live so a mute or slider move mid-mix sticks
+	const level = (gain: number) => mixVolume * Math.cbrt(Math.max(0, gain));
 	await send(to, "set_property", "pause", false);
-	const start = Date.now();
+	let start = Date.now();
 	for (let x = 0; x < 1; ) {
+		// Paused in TIDAL: hold both decks and the fade where they are
+		if (mixHeld) {
+			const at = Date.now();
+			await Promise.all([send(from, "set_property", "pause", true), send(to, "set_property", "pause", true)]);
+			while (mixHeld) await sleep(100);
+			await Promise.all([send(from, "set_property", "pause", false), send(to, "set_property", "pause", false)]);
+			start += Date.now() - at;
+		}
 		x = Math.min(1, (Date.now() - start) / (seconds * 1000));
 		await Promise.all([
 			send(from, "set_property", "volume", level(Math.cos((x * Math.PI) / 2))),
 			send(to, "set_property", "volume", level(Math.sin((x * Math.PI) / 2))),
 		]);
-		// Halfway, the incoming deck takes the bass in one go (two kicks at once would boom)
-		if (!swapped && x >= 0.5) {
+		// A quarter in (before the incoming song is loud), it takes the bass in one go (two kicks at once would boom)
+		if (!swapped && x >= 0.25) {
 			swapped = true;
 			await Promise.all([send(from, "af-command", BASS, "g", String(BASS_CUT)), send(to, "af-command", BASS, "g", "0")]).catch(() => {});
 		}

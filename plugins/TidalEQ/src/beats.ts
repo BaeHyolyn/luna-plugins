@@ -20,23 +20,29 @@ export type MixPlan = {
 };
 
 const MAX_STRETCH = 0.08; // beyond ±8% a tempo change is audible: fade instead
+// Below this the grid is a guess (no drums: piano, acoustic, ambient), fade instead. Measured on TIDAL: no-drum songs
+// 0.38-0.59 (Debussy, Satie, Eno, Einaudi, Bon Iver), drum songs 0.52-1 (rap, house).
+// shortcut: the score overlaps around 0.5-0.6, so a few sparse drum songs fade; upgrade with a kick-band measure if that annoys
+const MIN_CONFIDENCE = 0.6;
 
 /** How to go from `out` (now at `now` s, the mix can start `lead` s from now at the earliest) into `inn`. */
 export const planMix = (out: TrackGrid, inn: TrackGrid, now: number, lead = 1.5, maxBars = 16): MixPlan => {
 	const barOut = 240 / out.bpm;
 	const barIn = 240 / inn.bpm;
 	const nextBar = (t: number) => out.downbeat + Math.max(0, Math.ceil((t - out.downbeat) / barOut)) * barOut;
-	const outAt = nextBar(now + lead);
+	// Past the outgoing track's end (cue ran long, or a very short track): fade out right away
+	const outAt = Math.min(nextBar(now + lead), Math.max(0, out.duration - 1));
 	const left = Math.floor((out.duration - outAt) / barOut); // whole bars the outgoing track still has
 	// Half/double tempo counts as a match: the beats still line up
 	const speed = [1, 2, 0.5].map((m) => (out.bpm / inn.bpm) * m).reduce((a, b) => (Math.abs(b - 1) < Math.abs(a - 1) ? b : a));
-	if (Math.abs(speed - 1) > MAX_STRETCH || left < 4) {
-		return { style: "fade", outAt, inAt: inn.downbeat, speed: 1, seconds: Math.min(6, Math.max(1, out.duration - outAt)) };
+	if (Math.abs(speed - 1) > MAX_STRETCH || left < 4 || !(Math.min(out.confidence, inn.confidence) >= MIN_CONFIDENCE)) {
+		// Without a shared beat, a longer fade hides the clash better
+		return { style: "fade", outAt, inAt: inn.downbeat, speed: 1, seconds: Math.min(8, Math.max(1, out.duration - outAt)) };
 	}
 	const bars = Math.min(maxBars, left);
 	// Ride the incoming intro so its full-energy part lands as the mix ends
 	const introBars = Math.floor((inn.introEnd - inn.downbeat) / barIn);
-	const inAt = inn.downbeat + Math.max(0, introBars - bars) * barIn;
+	const inAt = Math.min(inn.downbeat + Math.max(0, introBars - bars) * barIn, inn.duration / 2);
 	return { style: "beatmix", outAt, inAt, speed, seconds: bars * barOut };
 };
 

@@ -18,8 +18,8 @@ From the store: see the [main README](../../README.md#install).
 - **Your taste:** songs and artists in your favorites come first; an artist you skip in the first 30 seconds is avoided for the rest of the session.
 - Never repeats a song in a session, and remembers songs TIDAL refused to play (region locks) so it doesn't pick them again.
 - **Mix** (needs TidalEQ with its equalizer on): each song blends into the next.
-  - When the tempos are close (within 8%, half or double time counts), the next song is sped up or slowed down to match (pitch kept), starts on a bar line, and the two play together for 16 bars; halfway, the bass swaps from one to the other.
-  - Otherwise a short fade, still starting on a bar line.
+  - When the tempos are close (within 8%, half or double time counts), the next song is sped up or slowed down to match (pitch kept), starts on a bar line, and the two play together for up to 16 bars (**Mix length**: 8, 16 or 32); a quarter of the way in, the bass moves from one to the other (**Bass swap**, can be turned off).
+  - Otherwise, or for songs without a clear beat (piano, acoustic, ambient), a fade of up to 8 s, still starting on a bar line.
   - Songs your own queue brings get mixed too; the DJ only picks songs once the queue runs out (or you click the DJ button).
 
 ## How it works
