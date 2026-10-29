@@ -6,6 +6,7 @@ Plugins for [TidaLuna](https://github.com/Inrixia/TidaLuna), all in one store.
 | --- | --- |
 | [TidalPresence](plugins/TidalPresence/README.md) | Your TIDAL music in Discord, your way: custom text, audio quality, karaoke lyrics and more. |
 | [TidalEQ](plugins/TidalEQ/README.md) | A real equalizer and visualizer inside TIDAL. Needs mpv, Windows only for now. |
+| [TidalDJ](plugins/TidalDJ/README.md) | An endless DJ: keeps the music going with radio picks, and with TidalEQ mixes songs on the beat. |
 
 ## Install
 

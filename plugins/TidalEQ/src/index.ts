@@ -4,12 +4,13 @@ import { ipcRenderer, MediaItem, PlayState, redux, safeInterval } from "@luna/li
 import { buildChain } from "./eq";
 import { addPanelTab, EqPanel } from "./NowPlayingTab";
 import {
-	getTime, isAlive, loadTrack, prepareTrack, seek, setChain, setPaused, setVolume, startAnalysis, startPlayer, stopAnalysis, stopPlayer, stopTrack,
+	cueTrack, decodeTrack, easeSpeed, getTime, isAlive, loadTrack, prepareTrack, seek, startMix, setChain, setPaused, setVolume, startAnalysis, startPlayer, stopAnalysis, stopPlayer, stopTrack,
 	trackFailed,
 } from "./player.native";
 import { setEqChangeHandler, settings, vizSettings } from "./Settings";
 import { COVER, resetPcm, setPositionSource, startVisualizer } from "./Visualizer";
 import { VizPanel } from "./VizPanel";
+import { analyzeBeats, BEAT_RATE, planMix, type TrackGrid } from "./beats";
 import { PCM_RATE } from "./viz";
 
 export const unloads = new Set<LunaUnload>();
@@ -34,6 +35,7 @@ let analyzedId: MediaItem["id"] | null = null; // track the visualizer has sampl
 let tidalPlaysId: MediaItem["id"] | null = null; // a track mpv couldn't get: TIDAL plays it itself, no retry loop
 let generation = 0; // bumps on every start/stop, so a slow start that was overtaken gives up
 let starting: Promise<void> | null = null;
+let mixing = false; // a DJ transition owns both decks; sync waits until TIDAL has caught up
 
 const tidalVolume = () => redux.store.getState().playbackControls.volume ?? 100;
 // TIDAL reports its position only every ~300 ms; fill the gaps with elapsed time so mpv isn't judged against a stale value
@@ -52,7 +54,9 @@ const setOriginalVolume = (volume: number) =>
 	ipcRenderer.send("player.message", JSON.stringify({ command: "media.volume", volume }));
 
 const sync = async () => {
-	if (!running || busy || performance.now() < holdUntil) return;
+	// TIDAL restores its own volume when it changes track by itself, which it can do mid-mix: keep it silent
+	if (running && mixing) setOriginalVolume(0);
+	if (!running || busy || mixing || performance.now() < holdUntil) return;
 	busy = true;
 	try {
 		// mpv crashed or was closed: hand the sound back to TIDAL instead of staying muted
@@ -203,6 +207,86 @@ const doStart = async () => {
 	lastPaused = null;
 	lastVolume = -1;
 	await sync();
+};
+
+/**
+ * For TidalDJ: mixes from the playing track into `id` (beat-matched with a bass swap when tempos allow, else a fade,
+ * starting on the next bar line), then moves
+ * TIDAL to it at the same position. `id` must be next in TIDAL's queue. False when it couldn't mix (TIDAL just moves on).
+ */
+export const mixInto = async (id: MediaItem["id"]) => {
+	if (!running || mixing || loadedId === null || loadedId === tidalPlaysId) return false;
+	mixing = true;
+	try {
+		const media = await MediaItem.fromId(id);
+		const info = await media?.playbackInfo(PlayState.playbackContext?.actualAudioQuality).catch(() => undefined);
+		const [from, to] = await Promise.all([analyzeTrack(loadedId), analyzeTrack(id)]);
+		const now = (await getTime()) ?? 0;
+		// Without a grid for both tracks: a plain fade, right away
+		let plan = from && to ? planMix(from, to, now, 3) : { style: "fade" as const, outAt: now, inAt: 0, speed: 1, seconds: 6 };
+		const beatmix = plan.style === "beatmix";
+		if (!media || !info || !(await cueTrack(info, plan.inAt, plan.speed, beatmix))) return false;
+		// Cueing can take longer than planned: move to a later bar line rather than start off the beat
+		if (from && to && ((await getTime()) ?? 0) > plan.outAt - 0.3) plan = { ...plan, outAt: planMix(from, to, (await getTime()) ?? 0, 0.5).outAt };
+		for (;;) {
+			const left = plan.outAt - ((await getTime()) ?? plan.outAt);
+			if (left <= 0.4) {
+				if (left > 0) await new Promise((r) => setTimeout(r, left * 1000));
+				break;
+			}
+			await new Promise((r) => setTimeout(r, (left - 0.3) * 1000));
+		}
+		trace.log(`mix ${plan.style}: ${from?.bpm.toFixed(1)} → ${to?.bpm.toFixed(1)} BPM ×${plan.speed.toFixed(3)}, ${plan.seconds.toFixed(1)} s from ${plan.inAt.toFixed(1)} s`);
+		await startMix(plan.seconds, tidalVolume(), beatmix);
+		loadedId = media.id;
+		analyzedId = null;
+		lastPaused = false;
+		// TIDAL's silent player follows: same track, same position
+		const { elements, currentIndex } = PlayState.playQueue;
+		if (String(elements[currentIndex]?.mediaItemId) !== String(id)) {
+			const i = elements.findIndex((e, k) => k > currentIndex && String(e.mediaItemId) === String(id));
+			if (i === -1) PlayState.playNext(id);
+			PlayState.moveTo(i === -1 ? currentIndex + 1 : i);
+		}
+		// TIDAL may play a remastered copy under another id (info.trackId): either counts as arrived
+		const arrived = () => [String(id), String(info.trackId)].includes(String(PlayState.playbackContext?.actualProductId));
+		for (let i = 0; i < 50 && (!arrived() || !PlayState.playing); i++) await new Promise((r) => setTimeout(r, 100));
+		// Adopt the id TIDAL reports, or the next sync would take it for a track change and reload it
+		loadedId = (await MediaItem.fromPlaybackContext())?.id ?? loadedId;
+		// TIDAL ignores a seek while it is still loading the track: retry until it lands
+		for (let i = 0; i < 20; i++) {
+			const time = await getTime();
+			if (time === null || Math.abs(tidalPosition() - time) < 1) break;
+			PlayState.seek(time + 0.3);
+			await new Promise((r) => setTimeout(r, 400));
+		}
+		await easeSpeed();
+		loadedAt = performance.now();
+		return true;
+	} catch (err) {
+		trace.warn("mix failed", err);
+		return false;
+	} finally {
+		mixing = false;
+	}
+};
+
+/** For TidalDJ: beat grid, tempo and intro/outro of any track (decoded on the side, cached). Null if it can't be analysed. */
+const grids = new Map<string, Promise<TrackGrid | null>>();
+export const analyzeTrack = (id: MediaItem["id"]) => {
+	const key = String(id);
+	if (!grids.has(key)) {
+		const job = (async () => {
+			const media = await MediaItem.fromId(id);
+			const info = await media?.playbackInfo(PlayState.playbackContext?.actualAudioQuality).catch(() => undefined);
+			const bytes = info && (await decodeTrack(info, BEAT_RATE, settings.mpvPath));
+			// slice(): an aligned copy, IPC buffers can start at any byte
+			return bytes ? analyzeBeats(new Float32Array(bytes.slice().buffer, 0, bytes.length >> 2)) : null;
+		})().catch((err) => (trace.warn("analysis failed", err), null));
+		job.then((g) => g || grids.delete(key)); // retry failures next time
+		grids.set(key, job);
+	}
+	return grids.get(key)!;
 };
 
 const stop = async () => {

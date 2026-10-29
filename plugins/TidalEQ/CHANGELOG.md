@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0
+
+### New
+- **DJ mixing** for the new TidalDJ plugin: two players, so one song can blend into the next. When the tempos are close the next song is matched to the playing one's tempo (pitch kept), starts on a bar line and takes over the bass halfway through; otherwise a short fade.
+- **Beat analysis:** each song is decoded on the side to find its tempo, beats, bars, and where the intro ends and the outro starts.
+
 ## 1.4.1
 
 ### Fixed

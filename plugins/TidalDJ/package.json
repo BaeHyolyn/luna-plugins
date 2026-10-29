@@ -1,0 +1,11 @@
+{
+	"name": "TidalDJ",
+	"description": "An endless DJ for TIDAL: keeps the queue going with radio picks that match the moment, mood modes, your favorites and what you skip.",
+	"homepage": "https://github.com/BaeHyolyn/luna-plugins",
+	"author": {
+		"name": "BaeHyolyn",
+		"url": "https://github.com/BaeHyolyn",
+		"avatarUrl": "https://github.com/BaeHyolyn.png"
+	},
+	"exports": "./src/index.ts"
+}

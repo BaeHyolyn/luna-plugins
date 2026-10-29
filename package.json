@@ -1,6 +1,6 @@
 {
 	"name": "luna-plugins",
-	"description": "BaeHyolyn's TidaLuna plugins: TidalPresence and TidalEQ",
+	"description": "BaeHyolyn's TidaLuna plugins: TidalPresence, TidalEQ and TidalDJ",
 	"author": {
 		"name": "BaeHyolyn",
 		"url": "https://github.com/BaeHyolyn",
@@ -17,7 +17,7 @@
 		"build": "rimraf ./dist && tsx esbuild.config.ts",
 		"esWatch": "rimraf ./dist && tsx ./esbuild.config.ts --watch",
 		"serve": "http-server ./dist -p 3000 -s --cors -c-1",
-		"test": "tsx plugins/TidalPresence/src/lrc.test.ts && tsx plugins/TidalPresence/src/lookup.test.ts && tsx plugins/TidalPresence/src/rateLimit.test.ts && tsx plugins/TidalPresence/src/text.test.ts && tsx plugins/TidalPresence/src/styles.test.ts && tsx plugins/TidalEQ/src/eq.test.ts && tsx plugins/TidalEQ/src/viz.test.ts"
+		"test": "tsx plugins/TidalPresence/src/lrc.test.ts && tsx plugins/TidalPresence/src/lookup.test.ts && tsx plugins/TidalPresence/src/rateLimit.test.ts && tsx plugins/TidalPresence/src/text.test.ts && tsx plugins/TidalPresence/src/styles.test.ts && tsx plugins/TidalEQ/src/eq.test.ts && tsx plugins/TidalEQ/src/viz.test.ts && tsx plugins/TidalEQ/src/beats.test.ts && tsx plugins/TidalDJ/src/pick.test.ts"
 	},
 	"devDependencies": {
 		"@inrixia/helpers": "^3.21.2",
@@ -34,5 +34,5 @@
 		"typescript": "^5.9.3"
 	},
 	"license": "AGPL-3.0",
-	"version": "1.0.0"
+	"version": "1.1.0"
 }

@@ -41,6 +41,7 @@ Turn off TIDAL's exclusive mode: TidalEQ plays the audio itself, and exclusive m
   - sensitivity, frequency range, treble lift, sync offset and frame rate.
 - **Presets** for the visualizer, plus your own saved looks, and **Copy / Paste settings** to share them.
 - Every setting can go back to its default on its own (↺ or double-click), per section, or all at once.
+- **DJ mixing** for [TidalDJ](../TidalDJ/README.md): finds each song's tempo, beats, bars, intro and outro, and blends songs on the beat with tempo matching and a bass swap.
 - **Keyboard:** Tab to an equalizer band, then the arrows move it (←→ frequency, ↑↓ gain), PageUp/PageDown change its width and Delete resets it; Shift makes bigger steps. Color points move with the arrows and Delete removes them.
 
 ## How it works
