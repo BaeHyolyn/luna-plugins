@@ -84,9 +84,9 @@ safeInterval(
 		// The refused pick is the next song, or already the current one when TIDAL moved the queue anyway
 		const bad = elements.slice(currentIndex, currentIndex + 2).find((e) => djQueued.has(String(e.mediaItemId)) && String(e.mediaItemId) !== loaded);
 		// A pick that loaded after a replacement but was left stopped just needs a play
-		const idle = bad === undefined && djQueued.has(String(current?.mediaItemId)) && desiredPlaybackState === "PLAYING";
-		// NOT_PLAYING is TIDAL giving up at the end of the queue; a user pause is PAUSED and is left alone
-		if ((bad === undefined && !idle) || playbackState !== "NOT_PLAYING") return void (stuckSince = 0);
+		const idle = bad === undefined && djQueued.has(String(current?.mediaItemId));
+		// NOT_PLAYING while TIDAL still wants to play is it giving up; a user pause can also read NOT_PLAYING, so desired state decides
+		if ((bad === undefined && !idle) || playbackState !== "NOT_PLAYING" || desiredPlaybackState !== "PLAYING") return void (stuckSince = 0);
 		if (stuckSince === 0) return void (stuckSince = Date.now());
 		if (Date.now() - stuckSince < STUCK_MS || lastSeed === undefined) return;
 		stuckSince = 0;
